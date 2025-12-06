@@ -16,17 +16,17 @@ from firebase_admin import credentials, firestore
 if not firebase_admin._apps:
     try:
         # Load the entire Firebase JSON service account key from st.secrets["textkey"]
-        # The key is stored as a multi-line string in the secrets TOML file.
-        key_dict = json.loads(st.secrets["textkey"]) 
-        cred = credentials.Certificate(key_dict)
-        firebase_admin.initialize_app(cred)
-        st.toast("Cloud Database Connected!", icon="☁️")
-    except KeyError:
-        # This occurs if 'textkey' is missing from .streamlit/secrets.toml
-        st.error("🚨 Configuration Error: Firebase secret 'textkey' not found. Cloud features disabled.")
+        if "textkey" in st.secrets:
+            key_dict = json.loads(st.secrets["textkey"]) 
+            cred = credentials.Certificate(key_dict)
+            firebase_admin.initialize_app(cred)
+            st.toast("Cloud Database Connected!", icon="☁️")
+        else:
+            # Handle case where secrets file might be missing or key is absent
+            st.warning("⚠️ Firebase secret 'textkey' not found. Running in local-only mode.")
     except Exception as e:
         # General Firebase initialization error
-        st.error(f"🚨 Firebase Initialization Failed. Check secret content. Error: {e}")
+        st.error(f"🚨 Firebase Initialization Failed. Error: {e}")
         
 # Initialize Firestore client only if Firebase is initialized
 if firebase_admin._apps:
@@ -35,7 +35,7 @@ else:
     db = None # Use this as a guard clause in cloud functions
 
 # ==========================================
-# CONFIGURATION & DATA (Same as previous version)
+# CONFIGURATION & DATA 
 # ==========================================
 
 BUSINESS_CONFIG = [
@@ -62,6 +62,7 @@ UPGRADE_CONFIG = [
 
 class GameState:
     def __init__(self):
+        # Ensure all required attributes are initialized here to avoid errors
         self.money = 0.0
         self.lifetime_earnings = 0.0
         self.start_time = time.time()
@@ -86,7 +87,7 @@ class GameState:
         return obj
 
 # ==========================================
-# CLOUD SAVE/LOAD FUNCTIONS (Utilizing the DB connection)
+# CLOUD SAVE/LOAD FUNCTIONS
 # ==========================================
 
 def save_to_cloud(username, game_state_dict):
@@ -98,7 +99,6 @@ def save_to_cloud(username, game_state_dict):
     doc_data = {k: v for k, v in game_state_dict.items() if k not in ['history_time', 'history_value']}
     doc_ref.set(doc_data)
     
-    # Optional: Save history data in a sub-collection or separate doc if needed
     st.toast("☁️ Game Saved to Cloud!", icon="💾")
 
 def load_from_cloud(username):
@@ -119,8 +119,8 @@ def get_leaderboard():
     """Fetches top 10 players by Net Worth"""
     if not db: return []
     try:
-        # Order by lifetime_earnings descending
         users_ref = db.collection("players")
+        # Requires a composite index in Firestore for 'lifetime_earnings' DESC
         query = users_ref.order_by("lifetime_earnings", direction=firestore.Query.DESCENDING).limit(10)
         results = query.stream()
         
@@ -134,18 +134,20 @@ def get_leaderboard():
             })
         return leaderboard_data
     except Exception as e:
-        # This will often happen if the required index is not set up in Firestore
-        st.warning("⚠️ Leaderboard requires a Firestore index (lifetime_earnings DESC).")
+        # Provide a more specific warning for index errors
+        st.warning(f"⚠️ Leaderboard index error. You may need to create a Firestore index for 'lifetime_earnings' DESC. Details: {e}")
         return []
 
 
 # ==========================================
-# GAME ENGINE LOGIC (Same as previous version)
+# GAME ENGINE LOGIC 
 # ==========================================
 
 def initialize_session():
+    # Only initialize if the key is missing
     if 'game_state' not in st.session_state:
         st.session_state.game_state = GameState()
+    if 'live_mode' not in st.session_state:
         st.session_state.live_mode = False
     if 'username' not in st.session_state:
         st.session_state.username = ""
@@ -224,6 +226,7 @@ st.markdown("""
 initialize_session()
 process_tick()
 
+# Define the 'state' shortcut variable here for use throughout the script
 state = st.session_state.game_state
 passive_rate, click_rate = calculate_rates(state)
 
@@ -318,7 +321,8 @@ with tab1:
         with col_info:
             st.markdown(f"**{b['name']}** (Lvl {count})")
             st.caption(b['desc'])
-            st.caption(f"Income: {format_currency(b['base_income'] * count * (1.0 + state.angels * state.prestige_mult))}/s")
+            # Income display needs to use the current rate calculation for accurate display
+            st.caption(f"Income: {format_currency(b['base_income'] * count * (1.0 + state.angels * state.prestige_mult) * (calculate_rates(state)[0] / (calculate_rates(state)[0] if calculate_rates(state)[0] > 0 else 1)))}/s")
             
         with col_btn:
             btn_label = f"Buy: {format_currency(cost)}"
@@ -393,7 +397,7 @@ with tab4:
         lb_data = get_leaderboard()
         if lb_data:
             df = pd.DataFrame(lb_data)
-            df['Net Worth'] = df['Net Worth'].apply(format_currency) # Use your standard formatter
+            df['Net Worth'] = df['Net Worth'].apply(format_currency)
             df['Rank'] = range(1, len(df) + 1)
             
             st.dataframe(
@@ -406,7 +410,8 @@ with tab4:
         else:
             st.info("No players ranked yet. Be the first!")
 
-# --- Auto Refresh Footer ---
-if st.session_state.live_mode or st.session_state.money < 1000:
-    time.sleep(1) 
+# --- Auto Refresh Footer (FIXED) --- 
+# The issue was using st.session_state.money instead of state.money
+if st.session_state.live_mode or state.money < 1000:
+    time.sleep(1)
     st.rerun()
