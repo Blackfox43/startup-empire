@@ -9,24 +9,38 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 # ==========================================
-# DATABASE CONNECTION (CRITICAL SECTION)
+# DATABASE CONNECTION (CRITICAL SECTION - FIXED)
 # ==========================================
 
 # Use a Streamlit singleton pattern to initialize Firebase only once
 if not firebase_admin._apps:
-    try:
-        # Load the entire Firebase JSON service account key from st.secrets["textkey"]
-        if "textkey" in st.secrets:
-            key_dict = json.loads(st.secrets["textkey"]) 
+    cloud_config = st.secrets.get("firebase")
+    
+    if cloud_config:
+        try:
+            # Assemble the credentials dictionary from individual secrets fields
+            # This is more robust than parsing a single large JSON string
+            key_dict = {
+                "type": cloud_config["type"],
+                "project_id": cloud_config["project_id"],
+                "private_key_id": cloud_config["private_key_id"],
+                # The private_key is now correctly read as a multi-line string
+                "private_key": cloud_config["private_key"], 
+                "client_email": cloud_config["client_email"],
+                "client_id": cloud_config["client_id"],
+                "auth_uri": cloud_config["auth_uri"],
+                "token_uri": cloud_config["token_uri"],
+                "auth_provider_x509_cert_url": cloud_config["auth_provider_x509_cert_url"],
+                "client_x509_cert_url": cloud_config["client_x509_cert_url"],
+            }
+
             cred = credentials.Certificate(key_dict)
             firebase_admin.initialize_app(cred)
             st.toast("Cloud Database Connected!", icon="☁️")
-        else:
-            # Handle case where secrets file might be missing or key is absent
-            st.warning("⚠️ Firebase secret 'textkey' not found. Running in local-only mode.")
-    except Exception as e:
-        # General Firebase initialization error
-        st.error(f"🚨 Firebase Initialization Failed. Error: {e}")
+        except Exception as e:
+            st.error(f"🚨 Firebase Initialization Failed. Check secret keys under [firebase]. Error: {e}")
+    else:
+        st.warning("⚠️ Firebase secret [firebase] section not found. Running in local-only mode.")
         
 # Initialize Firestore client only if Firebase is initialized
 if firebase_admin._apps:
@@ -321,8 +335,10 @@ with tab1:
         with col_info:
             st.markdown(f"**{b['name']}** (Lvl {count})")
             st.caption(b['desc'])
-            # Income display needs to use the current rate calculation for accurate display
-            st.caption(f"Income: {format_currency(b['base_income'] * count * (1.0 + state.angels * state.prestige_mult) * (calculate_rates(state)[0] / (calculate_rates(state)[0] if calculate_rates(state)[0] > 0 else 1)))}/s")
+            # Simplified income calculation for display
+            base_income_calc = b['base_income'] * count * (1.0 + state.angels * state.prestige_mult)
+            final_income_display = base_income_calc * calculate_rates(state)[0] / (calculate_rates(state)[0] if calculate_rates(state)[0] > 0 else 1)
+            st.caption(f"Income: {format_currency(final_income_display)}/s")
             
         with col_btn:
             btn_label = f"Buy: {format_currency(cost)}"
@@ -410,8 +426,7 @@ with tab4:
         else:
             st.info("No players ranked yet. Be the first!")
 
-# --- Auto Refresh Footer (FIXED) --- 
-# The issue was using st.session_state.money instead of state.money
+# --- Auto Refresh Footer --- 
 if st.session_state.live_mode or state.money < 1000:
     time.sleep(1)
     st.rerun()
