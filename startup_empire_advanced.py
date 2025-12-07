@@ -9,7 +9,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 # ==========================================
-# DATABASE CONNECTION (CRITICAL SECTION - FIXED)
+# DATABASE CONNECTION (CRITICAL SECTION - PEM FIXED)
 # ==========================================
 
 # Use a Streamlit singleton pattern to initialize Firebase only once
@@ -18,14 +18,19 @@ if not firebase_admin._apps:
     
     if cloud_config:
         try:
+            private_key_single_line = cloud_config["private_key"]
+            
+            # CRITICAL FIX: The private key must be correctly formatted with newlines 
+            # for the firebase-admin SDK to read it as a valid PEM certificate.
+            # We assume the TOML secret is one single line.
+            private_key_pem = private_key_single_line.replace('-----END PRIVATE KEY-----', '\n-----END PRIVATE KEY-----\n')
+            
             # Assemble the credentials dictionary from individual secrets fields
-            # This is more robust than parsing a single large JSON string
             key_dict = {
                 "type": cloud_config["type"],
                 "project_id": cloud_config["project_id"],
                 "private_key_id": cloud_config["private_key_id"],
-                # The private_key is now correctly read as a multi-line string
-                "private_key": cloud_config["private_key"], 
+                "private_key": private_key_pem, # Use the corrected PEM format here
                 "client_email": cloud_config["client_email"],
                 "client_id": cloud_config["client_id"],
                 "auth_uri": cloud_config["auth_uri"],
@@ -38,7 +43,8 @@ if not firebase_admin._apps:
             firebase_admin.initialize_app(cred)
             st.toast("Cloud Database Connected!", icon="☁️")
         except Exception as e:
-            st.error(f"🚨 Firebase Initialization Failed. Check secret keys under [firebase]. Error: {e}")
+            # Added a clear instruction for the user to check their secrets file
+            st.error(f"🚨 Firebase Initialization Failed. Check secret keys under [firebase] for correct formatting. Error: {e}")
     else:
         st.warning("⚠️ Firebase secret [firebase] section not found. Running in local-only mode.")
         
@@ -106,7 +112,10 @@ class GameState:
 
 def save_to_cloud(username, game_state_dict):
     """Saves the current game state to Firestore"""
-    if not db: return st.error("Database unavailable.")
+    if not db: 
+        st.error("Database unavailable. Cannot save to cloud.")
+        return
+    
     doc_ref = db.collection("players").document(username)
     
     # Store history data separately to avoid hitting document size limits if history gets huge
@@ -117,7 +126,10 @@ def save_to_cloud(username, game_state_dict):
 
 def load_from_cloud(username):
     """Loads game state from Firestore"""
-    if not db: return st.error("Database unavailable.")
+    if not db: 
+        st.error("Database unavailable. Cannot load from cloud.")
+        return
+        
     doc_ref = db.collection("players").document(username)
     doc = doc_ref.get()
     if doc.exists:
